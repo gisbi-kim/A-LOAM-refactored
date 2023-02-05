@@ -107,13 +107,17 @@ Buffer surfLessFlatBuf;
 Buffer fullPointsBuf;
 std::mutex mBuf;
 
+nav_msgs::Path laserPath;
+
 // undistort lidar point
 void TransformToStart(PointType const *const pi, PointType *const po) {
     // interpolation ratio
     double s;
-    if (DISTORTION) s = (pi->intensity - int(pi->intensity)) / SCAN_PERIOD;
-    else
+    if (DISTORTION) {
+        s = (pi->intensity - int(pi->intensity)) / SCAN_PERIOD;
+    } else {
         s = 1.0;
+    }
     // s = 1;
     Eigen::Quaterniond q_point_last = Eigen::Quaterniond::Identity().slerp(s, q_last_curr);
     Eigen::Vector3d t_point_last = s * t_last_curr;
@@ -213,6 +217,7 @@ class Publishers {
         pubLaserCloudSurfLast =
             nh.advertise<sensor_msgs::PointCloud2>("/laser_cloud_surf_last", 100);
         pubLaserCloudFullRes = nh.advertise<sensor_msgs::PointCloud2>("/velodyne_cloud_3", 100);
+
         pubLaserOdometry = nh.advertise<nav_msgs::Odometry>("/laser_odom_to_init", 100);
         pubLaserPath = nh.advertise<nav_msgs::Path>("/laser_odom_path", 100);
     }
@@ -236,8 +241,6 @@ auto main(int argc, char **argv) -> int {
 
     auto subscribers = Subscribers(nh);
     auto publishers = Publishers(nh);
-
-    nav_msgs::Path laserPath;
 
     int frameCount = 0;
     ros::Rate rate(100);
