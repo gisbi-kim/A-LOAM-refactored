@@ -114,9 +114,9 @@ Eigen::Vector3d t_wmap_wodom(0, 0, 0);
 Eigen::Quaterniond q_wodom_curr(1, 0, 0, 0);
 Eigen::Vector3d t_wodom_curr(0, 0, 0);
 
-std::queue<sensor_msgs::PointCloud2ConstPtr> cornerLastBuf;
-std::queue<sensor_msgs::PointCloud2ConstPtr> surfLastBuf;
-std::queue<sensor_msgs::PointCloud2ConstPtr> fullResBuf;
+Buffer cornerLastBuf;
+Buffer surfLastBuf;
+Buffer fullResBuf;
 std::queue<nav_msgs::Odometry::ConstPtr> odometryBuf;
 std::mutex mBuf;
 
@@ -168,31 +168,29 @@ void pointAssociateTobeMapped(PointType const *const pi, PointType *const po)
 
 void laserCloudCornerLastHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudCornerLast2)
 {
-	mBuf.lock();
+	std::lock_guard<std::mutex> lock(mBuf);
 	cornerLastBuf.push(laserCloudCornerLast2);
-	mBuf.unlock();
 }
 
 void laserCloudSurfLastHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudSurfLast2)
 {
-	mBuf.lock();
+	std::lock_guard<std::mutex> lock(mBuf);
 	surfLastBuf.push(laserCloudSurfLast2);
-	mBuf.unlock();
 }
 
 void laserCloudFullResHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudFullRes2)
 {
-	mBuf.lock();
+	std::lock_guard<std::mutex> lock(mBuf);
 	fullResBuf.push(laserCloudFullRes2);
-	mBuf.unlock();
 }
 
 // receive odomtry
 void laserOdometryHandler(const nav_msgs::Odometry::ConstPtr &laserOdometry)
 {
-	mBuf.lock();
-	odometryBuf.push(laserOdometry);
-	mBuf.unlock();
+	{
+		std::lock_guard<std::mutex> lock(mBuf);
+		odometryBuf.push(laserOdometry);
+	}
 
 	// high frequence publish
 	Eigen::Quaterniond q_wodom_curr;
@@ -899,23 +897,15 @@ int main(int argc, char **argv)
 	downSizeFilterSurf.setLeafSize(planeRes, planeRes, planeRes);
 
 	ros::Subscriber subLaserCloudCornerLast = nh.subscribe<sensor_msgs::PointCloud2>("/laser_cloud_corner_last", 100, laserCloudCornerLastHandler);
-
 	ros::Subscriber subLaserCloudSurfLast = nh.subscribe<sensor_msgs::PointCloud2>("/laser_cloud_surf_last", 100, laserCloudSurfLastHandler);
-
+	ros::Subscriber subLaserCloudFullRes = nh.subscribe<sensor_msgs::PointCloud2>("/velodyne_cloud_3", 100, laserCloudFullResHandler);
 	ros::Subscriber subLaserOdometry = nh.subscribe<nav_msgs::Odometry>("/laser_odom_to_init", 100, laserOdometryHandler);
 
-	ros::Subscriber subLaserCloudFullRes = nh.subscribe<sensor_msgs::PointCloud2>("/velodyne_cloud_3", 100, laserCloudFullResHandler);
-
 	pubLaserCloudSurround = nh.advertise<sensor_msgs::PointCloud2>("/laser_cloud_surround", 100);
-
 	pubLaserCloudMap = nh.advertise<sensor_msgs::PointCloud2>("/laser_cloud_map", 100);
-
 	pubLaserCloudFullRes = nh.advertise<sensor_msgs::PointCloud2>("/velodyne_cloud_registered", 100);
-
 	pubOdomAftMapped = nh.advertise<nav_msgs::Odometry>("/aft_mapped_to_init", 100);
-
 	pubOdomAftMappedHighFrec = nh.advertise<nav_msgs::Odometry>("/aft_mapped_to_init_high_frec", 100);
-
 	pubLaserAfterMappedPath = nh.advertise<nav_msgs::Path>("/aft_mapped_path", 100);
 
 	for (int i = 0; i < laserCloudNum; i++)

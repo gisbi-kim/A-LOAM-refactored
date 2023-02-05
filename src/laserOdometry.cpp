@@ -50,14 +50,16 @@
 #include <eigen3/Eigen/Dense>
 #include <mutex>
 #include <queue>
+#include <functional>
 
 #include "aloam_velodyne/common.h"
 #include "aloam_velodyne/tic_toc.h"
 #include "lidarFactor.hpp"
 
-#define DISTORTION 0
+constexpr bool DISTORTION{true};
 
-int corner_correspondence = 0, plane_correspondence = 0;
+int corner_correspondence = 0;
+int plane_correspondence = 0;
 
 constexpr double SCAN_PERIOD = 0.1;
 constexpr double DISTANCE_SQ_THRESHOLD = 25;
@@ -75,14 +77,14 @@ double timeLaserCloudFullRes = 0;
 pcl::KdTreeFLANN<pcl::PointXYZI>::Ptr kdtreeCornerLast(new pcl::KdTreeFLANN<pcl::PointXYZI>());
 pcl::KdTreeFLANN<pcl::PointXYZI>::Ptr kdtreeSurfLast(new pcl::KdTreeFLANN<pcl::PointXYZI>());
 
-pcl::PointCloud<PointType>::Ptr cornerPointsSharp(new pcl::PointCloud<PointType>());
-pcl::PointCloud<PointType>::Ptr cornerPointsLessSharp(new pcl::PointCloud<PointType>());
-pcl::PointCloud<PointType>::Ptr surfPointsFlat(new pcl::PointCloud<PointType>());
-pcl::PointCloud<PointType>::Ptr surfPointsLessFlat(new pcl::PointCloud<PointType>());
+PCPtr cornerPointsSharp(new pcl::PointCloud<PointType>());
+PCPtr cornerPointsLessSharp(new pcl::PointCloud<PointType>());
+PCPtr surfPointsFlat(new pcl::PointCloud<PointType>());
+PCPtr surfPointsLessFlat(new pcl::PointCloud<PointType>());
 
-pcl::PointCloud<PointType>::Ptr laserCloudCornerLast(new pcl::PointCloud<PointType>());
-pcl::PointCloud<PointType>::Ptr laserCloudSurfLast(new pcl::PointCloud<PointType>());
-pcl::PointCloud<PointType>::Ptr laserCloudFullRes(new pcl::PointCloud<PointType>());
+PCPtr laserCloudCornerLast(new pcl::PointCloud<PointType>());
+PCPtr laserCloudSurfLast(new pcl::PointCloud<PointType>());
+PCPtr laserCloudFullRes(new pcl::PointCloud<PointType>());
 
 int laserCloudCornerLastNum = 0;
 int laserCloudSurfLastNum = 0;
@@ -98,11 +100,11 @@ double para_t[3] = {0, 0, 0};
 Eigen::Map<Eigen::Quaterniond> q_last_curr(para_q);
 Eigen::Map<Eigen::Vector3d> t_last_curr(para_t);
 
-std::queue<sensor_msgs::PointCloud2ConstPtr> cornerSharpBuf;
-std::queue<sensor_msgs::PointCloud2ConstPtr> cornerLessSharpBuf;
-std::queue<sensor_msgs::PointCloud2ConstPtr> surfFlatBuf;
-std::queue<sensor_msgs::PointCloud2ConstPtr> surfLessFlatBuf;
-std::queue<sensor_msgs::PointCloud2ConstPtr> fullPointsBuf;
+Buffer cornerSharpBuf;
+Buffer cornerLessSharpBuf;
+Buffer surfFlatBuf;
+Buffer surfLessFlatBuf;
+Buffer fullPointsBuf;
 std::mutex mBuf;
 
 // undistort lidar point
@@ -145,42 +147,6 @@ void TransformToEnd(PointType const *const pi, PointType *const po)
     po->intensity = int(pi->intensity);
 }
 
-void laserCloudSharpHandler(const sensor_msgs::PointCloud2ConstPtr &cornerPointsSharp2)
-{
-    mBuf.lock();
-    cornerSharpBuf.push(cornerPointsSharp2);
-    mBuf.unlock();
-}
-
-void laserCloudLessSharpHandler(const sensor_msgs::PointCloud2ConstPtr &cornerPointsLessSharp2)
-{
-    mBuf.lock();
-    cornerLessSharpBuf.push(cornerPointsLessSharp2);
-    mBuf.unlock();
-}
-
-void laserCloudFlatHandler(const sensor_msgs::PointCloud2ConstPtr &surfPointsFlat2)
-{
-    mBuf.lock();
-    surfFlatBuf.push(surfPointsFlat2);
-    mBuf.unlock();
-}
-
-void laserCloudLessFlatHandler(const sensor_msgs::PointCloud2ConstPtr &surfPointsLessFlat2)
-{
-    mBuf.lock();
-    surfLessFlatBuf.push(surfPointsLessFlat2);
-    mBuf.unlock();
-}
-
-// receive all point cloud
-void laserCloudFullResHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudFullRes2)
-{
-    mBuf.lock();
-    fullPointsBuf.push(laserCloudFullRes2);
-    mBuf.unlock();
-}
-
 bool AreBuffersToBeConsumerble(void)
 {
     return (!cornerSharpBuf.empty() && !cornerLessSharpBuf.empty() &&
@@ -205,16 +171,25 @@ bool AreTimestampsUnSynced(void)
            timeSurfPointsLessFlat != timeLaserCloudFullRes;
 }
 
+void PrepareDataFromROSMsg(void)
+{
+    PCPtrFromROSMsgBufferWithPop(cornerSharpBuf, cornerPointsSharp, mBuf);
+    PCPtrFromROSMsgBufferWithPop(cornerLessSharpBuf, cornerPointsLessSharp, mBuf);
+    PCPtrFromROSMsgBufferWithPop(surfFlatBuf, surfPointsFlat, mBuf);
+    PCPtrFromROSMsgBufferWithPop(surfLessFlatBuf, surfPointsLessFlat, mBuf);
+    PCPtrFromROSMsgBufferWithPop(fullPointsBuf, laserCloudFullRes, mBuf);
+}
+
 class Subscribers
 {
 public:
     Subscribers(ros::NodeHandle &_nh) : nh(_nh)
     {
-        subCornerPointsSharp = nh.subscribe<sensor_msgs::PointCloud2>("/laser_cloud_sharp", 100, laserCloudSharpHandler);
-        subCornerPointsLessSharp = nh.subscribe<sensor_msgs::PointCloud2>("/laser_cloud_less_sharp", 100, laserCloudLessSharpHandler);
-        subSurfPointsFlat = nh.subscribe<sensor_msgs::PointCloud2>("/laser_cloud_flat", 100, laserCloudFlatHandler);
-        subSurfPointsLessFlat = nh.subscribe<sensor_msgs::PointCloud2>("/laser_cloud_less_flat", 100, laserCloudLessFlatHandler);
-        subLaserCloudFullRes = nh.subscribe<sensor_msgs::PointCloud2>("/velodyne_cloud_2", 100, laserCloudFullResHandler);
+        subCornerPointsSharp = nh.subscribe<sensor_msgs::PointCloud2>("/laser_cloud_sharp", 100, laserCloudPushToBufferdHandlerFactory(cornerSharpBuf, mBuf));
+        subCornerPointsLessSharp = nh.subscribe<sensor_msgs::PointCloud2>("/laser_cloud_less_sharp", 100, laserCloudPushToBufferdHandlerFactory(cornerLessSharpBuf, mBuf));
+        subSurfPointsFlat = nh.subscribe<sensor_msgs::PointCloud2>("/laser_cloud_flat", 100, laserCloudPushToBufferdHandlerFactory(surfFlatBuf, mBuf));
+        subSurfPointsLessFlat = nh.subscribe<sensor_msgs::PointCloud2>("/laser_cloud_less_flat", 100, laserCloudPushToBufferdHandlerFactory(surfLessFlatBuf, mBuf));
+        subLaserCloudFullRes = nh.subscribe<sensor_msgs::PointCloud2>("/velodyne_cloud_2", 100, laserCloudPushToBufferdHandlerFactory(fullPointsBuf, mBuf));
     }
 
 public:
@@ -282,27 +257,7 @@ auto main(int argc, char **argv) -> int
             ROS_BREAK();
         }
 
-        mBuf.lock();
-        cornerPointsSharp->clear();
-        pcl::fromROSMsg(*cornerSharpBuf.front(), *cornerPointsSharp);
-        cornerSharpBuf.pop();
-
-        cornerPointsLessSharp->clear();
-        pcl::fromROSMsg(*cornerLessSharpBuf.front(), *cornerPointsLessSharp);
-        cornerLessSharpBuf.pop();
-
-        surfPointsFlat->clear();
-        pcl::fromROSMsg(*surfFlatBuf.front(), *surfPointsFlat);
-        surfFlatBuf.pop();
-
-        surfPointsLessFlat->clear();
-        pcl::fromROSMsg(*surfLessFlatBuf.front(), *surfPointsLessFlat);
-        surfLessFlatBuf.pop();
-
-        laserCloudFullRes->clear();
-        pcl::fromROSMsg(*fullPointsBuf.front(), *laserCloudFullRes);
-        fullPointsBuf.pop();
-        mBuf.unlock();
+        PrepareDataFromROSMsg();
 
         TicToc t_whole;
         // initializing
@@ -571,7 +526,7 @@ auto main(int argc, char **argv) -> int
         laserPath.header.frame_id = "/camera_init";
         publishers.pubLaserPath.publish(laserPath);
 
-        pcl::PointCloud<PointType>::Ptr laserCloudTemp = cornerPointsLessSharp;
+        PCPtr laserCloudTemp = cornerPointsLessSharp;
         cornerPointsLessSharp = laserCloudCornerLast;
         laserCloudCornerLast = laserCloudTemp;
 

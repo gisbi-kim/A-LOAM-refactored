@@ -1,10 +1,9 @@
 // This is an advanced implementation of the algorithm described in the following paper:
 //   J. Zhang and S. Singh. LOAM: Lidar Odometry and Mapping in Real-time.
-//     Robotics: Science and Systems Conference (RSS). Berkeley, CA, July 2014. 
+//     Robotics: Science and Systems Conference (RSS). Berkeley, CA, July 2014.
 
 // Modifier: Tong Qin               qintonguav@gmail.com
 // 	         Shaozu Cao 		    saozu.cao@connect.ust.hk
-
 
 // Copyright 2013, Ji Zhang, Carnegie Mellon University
 // Further contributions copyright (c) 2016, Southwest Research Institute
@@ -37,10 +36,16 @@
 #pragma once
 
 #include <cmath>
+#include <mutex>
+#include <queue>
 
+#include <pcl_conversions/pcl_conversions.h>
+#include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 
-typedef pcl::PointXYZI PointType;
+using PointType = pcl::PointXYZI;
+using PCPtr = pcl::PointCloud<PointType>::Ptr;
+using Buffer = std::queue<sensor_msgs::PointCloud2ConstPtr>;
 
 inline double rad2deg(double radians)
 {
@@ -50,4 +55,32 @@ inline double rad2deg(double radians)
 inline double deg2rad(double degrees)
 {
   return degrees * M_PI / 180.0;
+}
+
+template <typename Buffer>
+void PCPtrFromROSMsgBufferWithPop(Buffer &buf, PCPtr &pc_ptr, std::mutex &mtx)
+{
+  std::lock_guard<std::mutex> lock(mtx);
+
+  pc_ptr->clear();
+  pcl::fromROSMsg(*buf.front(), *pc_ptr);
+
+  buf.pop();
+}
+
+void laserCloudPushToBufferdHandler(Buffer &pts_buffer, std::mutex &mtx, const sensor_msgs::PointCloud2ConstPtr &pts)
+{
+  std::lock_guard<std::mutex> lock(mtx);
+  pts_buffer.push(pts);
+}
+
+std::function<void(const sensor_msgs::PointCloud2ConstPtr &)> laserCloudPushToBufferdHandlerFactory(Buffer &pts_buffer, std::mutex &mtx)
+{
+  std::function<void(const sensor_msgs::PointCloud2ConstPtr &)>
+      laserCloudHandlerGenerated = [&pts_buffer, &mtx](const sensor_msgs::PointCloud2ConstPtr &pts)
+  {
+    laserCloudPushToBufferdHandler(pts_buffer, mtx, pts);
+  };
+
+  return laserCloudHandlerGenerated;
 }
